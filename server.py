@@ -407,8 +407,6 @@ def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
             return f"Error listing GTM tags: {error_msg}\n\nDebug info:\n{traceback.format_exc()}"
 
 if __name__ == "__main__":
-    mcp.run(
-        transport="streamable-http",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "9000")),
-    )
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = int(os.getenv("PORT", "9000"))
+    mcp.run(transport="streamable-http")
