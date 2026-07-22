@@ -296,63 +296,14 @@ def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
 
 if __name__ == "__main__":
     import uvicorn
-    from mcp.server.transport_security import TransportSecurityMiddleware
-    import sse_starlette.sse
-    import inspect
+    from starlette.responses import PlainTextResponse
     
-    # 1. Disable DNS rebinding protection which throws "ValueError: Request validation failed"
-    # when we spoof the host header via Cloudflare Tunnel.
-    async def bypass_validate(self, request, is_post=False):
-        if is_post:
-            content_type = request.headers.get("content-type")
-            if not self._validate_content_type(content_type):
-                from starlette.responses import Response
-                return Response("Invalid Content-Type header", status_code=400)
-        return None
-        
-    TransportSecurityMiddleware.validate_request = bypass_validate
-
-    # 2. Patch EventSourceResponse to pad the SSE stream. Cloudflare tunnels buffer
-    # Server-Sent Events by default until a certain size is reached. By sending a large
-    # initial 'ping' event, we force Cloudflare to flush the buffer immediately, allowing
-    # the client to receive the 'endpoint' event without hanging.
-    original_init = sse_starlette.sse.EventSourceResponse.__init__
-    
-    def padded_init(self, content, *args, **kwargs):
-        async def padded_async_content():
-            # Send ~240KB of padding. Cloudflare proxies can buffer up to 100KB for chunked responses.
-            # This massive padding guarantees the buffer immediately overflows and flushes the 'endpoint' event.
-            yield {"event": "ping", "data": "pad" * 60000}
-            
-            if hasattr(content, '__aiter__'):
-                async for item in content:
-                    yield item
-            elif inspect.iscoroutinefunction(content):
-                # sse_writer is a coroutine function that returns an async generator in FastMCP
-                async for item in content():
-                    yield item
-            else:
-                for item in content:
-                    yield item
-                    
-        # Cloudflare strictly requires 'Cache-Control: no-cache' to disable SSE buffering.
-        # FastMCP uses 'no-store' by default which Cloudflare ignores.
-        custom_headers = dict(kwargs.pop('headers', {}) or {})
-        custom_headers["Cache-Control"] = "no-cache"
-        kwargs['headers'] = custom_headers
-        
-        original_init(self, padded_async_content(), *args, **kwargs)
-
-    sse_starlette.sse.EventSourceResponse.__init__ = padded_init
+    # Add a simple health check at the root URL so Render and browsers don't show 404
+    @mcp._app.get("/")
+    async def health_check():
+        return PlainTextResponse("MCP Server is running! Point your Claude config to /sse")
 
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.getenv("PORT", "9000"))
     
-    # We run uvicorn directly to disable proxy_headers so Cloudflare tunnel works
-    uvicorn.run(
-        mcp.sse_app, 
-        host=mcp.settings.host, 
-        port=mcp.settings.port,
-        proxy_headers=False,
-        forwarded_allow_ips=""
-    )
+    uvicorn.run(mcp.sse_app, host=mcp.settings.host, port=mcp.settings.port)
