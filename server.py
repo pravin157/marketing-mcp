@@ -16,8 +16,9 @@ from google.analytics.data_v1beta.types import (
     RunReportRequest,
 )
 
-# Initialize FastMCP server
-mcp = FastMCP("Marketing Runpod")
+# Initialize FastMCP server with host='0.0.0.0' so it doesn't accidentally
+# auto-enable local DNS rebinding protection (which blocks Render URLs with a 421)
+mcp = FastMCP("Marketing Runpod", host="0.0.0.0")
 
 SCOPES = [
     'https://www.googleapis.com/auth/webmasters.readonly',
