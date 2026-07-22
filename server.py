@@ -295,6 +295,15 @@ def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
         return f"Error listing GTM tags: {str(e)}"
 
 if __name__ == "__main__":
+    import uvicorn
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.getenv("PORT", "9000"))
-    mcp.run(transport="sse")
+    
+    # We run uvicorn directly to disable proxy_headers so Cloudflare tunnel works
+    uvicorn.run(
+        mcp.sse_app, 
+        host=mcp.settings.host, 
+        port=mcp.settings.port,
+        proxy_headers=False,
+        forwarded_allow_ips=""
+    )
