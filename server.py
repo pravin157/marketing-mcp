@@ -297,11 +297,8 @@ def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
 if __name__ == "__main__":
     import uvicorn
     from starlette.responses import PlainTextResponse
-    
-    # Add a simple health check at the root URL so Render and browsers don't show 404
-    @mcp._app.get("/")
-    async def health_check():
-        return PlainTextResponse("MCP Server is running! Point your Claude config to /sse")
+    # The root URL / will return a 404 in the browser, but this is expected!
+    # Claude Desktop connects to the /sse endpoint directly.
 
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.getenv("PORT", "9000"))
