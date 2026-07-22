@@ -22,48 +22,30 @@ mcp = FastMCP("Google Marketing")
 SCOPES = [
     'https://www.googleapis.com/auth/webmasters.readonly',
     'https://www.googleapis.com/auth/analytics.readonly',
-    'https://www.googleapis.com/auth/analytics.edit',
     'https://www.googleapis.com/auth/tagmanager.readonly'
 ]
 CLIENT_SECRET_FILE = os.environ.get('GOOGLE_CLIENT_SECRET_FILE', 'credentials.json')
-
-# Token file should be in the same directory as client_secret.json
-TOKEN_DIR = os.path.dirname(os.path.abspath(CLIENT_SECRET_FILE)) or '.'
-TOKEN_FILE = os.path.join(TOKEN_DIR, 'token.json')
+TOKEN_FILE = 'token.json'
 
 def get_credentials():
     """Authenticate and return Google Credentials."""
     creds = None
     if os.path.exists(TOKEN_FILE):
-        try:
-            with open(TOKEN_FILE, 'r') as token:
-                creds = Credentials.from_authorized_user_info(json.load(token), SCOPES)
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Invalid token file {TOKEN_FILE}: {e}. Re-authenticating...")
-            creds = None
+        with open(TOKEN_FILE, 'r') as token:
+            creds = Credentials.from_authorized_user_info(json.load(token), SCOPES)
             
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception as e:
-                print(f"Warning: Failed to refresh token: {e}. Re-authenticating...")
-                creds = None
-        
-        if not creds:
+            creds.refresh(Request())
+        else:
             if not os.path.exists(CLIENT_SECRET_FILE):
                 raise FileNotFoundError(f"OAuth Client Secret file '{CLIENT_SECRET_FILE}' not found. Please provide one or set GOOGLE_CLIENT_SECRET_FILE env var.")
             
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
-        
-        # Ensure token directory exists
-        try:
-            os.makedirs(TOKEN_DIR, exist_ok=True)
-            with open(TOKEN_FILE, 'w') as token:
-                token.write(creds.to_json())
-        except IOError as e:
-            print(f"Warning: Could not save token file to {TOKEN_FILE}: {e}")
+            
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
             
     return creds
 
@@ -149,39 +131,6 @@ def gsc_query_analytics(site_url: str, start_date: str, end_date: str, dimension
 # ==========================================
 # Google Analytics 4 (GA4) Tools
 # ==========================================
-
-@mcp.tool()
-def ga4_list_properties() -> str:
-    """List all GA4 properties the user has access to."""
-    creds = get_credentials()
-    service = build('analyticsadmin', 'v1beta', credentials=creds)
-    try:
-        request = service.accounts().list()
-        accounts_response = request.execute()
-        accounts = accounts_response.get('accounts', [])
-        
-        if not accounts:
-            return "No GA4 accounts found."
-        
-        result = "GA4 Accounts and Properties:\n\n"
-        for account in accounts:
-            account_id = account.get('name', '').split('/')[-1]
-            account_display_name = account.get('displayName', 'Unknown')
-            result += f"Account: {account_display_name} (ID: {account_id})\n"
-            
-            # List properties for this account
-            properties_request = service.accounts().properties().list(parent=f"accounts/{account_id}")
-            properties_response = properties_request.execute()
-            properties = properties_response.get('properties', [])
-            
-            for prop in properties:
-                prop_id = prop.get('name', '').split('/')[-1]
-                prop_display_name = prop.get('displayName', 'Unknown')
-                result += f"  - Property: {prop_display_name} (ID: {prop_id})\n"
-        
-        return result
-    except Exception as e:
-        return f"Error listing GA4 properties: {str(e)}"
 
 @mcp.tool()
 def ga4_traffic_acquisition(property_id: str, start_date: str, end_date: str, limit: int = 10) -> str:
@@ -299,114 +248,53 @@ def gtm_list_accounts_containers() -> str:
     service = get_gtm_service()
     try:
         accounts_resp = service.accounts().list().execute()
-        
-        # Try different possible response keys
-        accounts = accounts_resp.get('account', accounts_resp.get('accounts', []))
+        accounts = accounts_resp.get('account', [])
         
         if not accounts:
-            return (
-                "No GTM accounts found via API.\n\n"
-                "IMPORTANT: This can happen if:\n"
-                "1. The authenticated Google account doesn't have GTM access\n"
-                "2. You need to grant GTM permissions to this Google account\n"
-                "3. The GTM account is in a different Google Cloud project\n\n"
-                "WORKAROUND: Use gtm_list_tags() directly with known IDs:\n"
-                "  - Account: 6247347265\n"
-                "  - Container: 194131688\n"
-                "  - Workspace: 45\n\n"
-                "These IDs can be found in GTM Admin > Container Settings"
-            )
+            return "No GTM accounts found."
             
         result = "GTM Accounts and Containers:\n"
         for acc in accounts:
-            acc_id = acc.get('accountId', acc.get('id', 'N/A'))
-            acc_name = acc.get('name', 'Unknown')
+            acc_id = acc['accountId']
+            acc_name = acc['name']
             result += f"\nAccount: {acc_name} (ID: {acc_id})\n"
             
             # List containers for this account
             path = f"accounts/{acc_id}"
             containers_resp = service.accounts().containers().list(parent=path).execute()
-            containers = containers_resp.get('container', containers_resp.get('containers', []))
+            containers = containers_resp.get('container', [])
             
             for cont in containers:
-                cont_id = cont.get('containerId', cont.get('id', 'N/A'))
-                cont_name = cont.get('name', 'Unknown')
-                result += f"  - Container: {cont_name} (ID: {cont_id}) [Public ID: {cont.get('publicId', 'N/A')}]\n"
+                result += f"  - Container: {cont['name']} (ID: {cont['containerId']}) [Public ID: {cont.get('publicId', 'N/A')}]\n"
                 
         return result
     except Exception as e:
-        import traceback
-        return f"Error listing GTM accounts: {str(e)}\n\nDetails:\n{traceback.format_exc()}"
+        return f"Error listing GTM accounts: {str(e)}"
 
 @mcp.tool()
 def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
     """
     List all active tracking tags in a GTM container workspace.
     Useful for Marketing to audit what is being tracked (e.g. Meta Pixel, LinkedIn Insight).
-    
-    Args:
-        account_id: GTM Account ID (e.g., '6247347265')
-        container_id: GTM Container ID - the internal numeric ID (e.g., '194131688')
-        workspace_id: GTM Workspace ID (e.g., '45')
-    
-    Note: Use the internal numeric container ID, not the public container ID (GTM-XXXXX)
     """
     service = get_gtm_service()
     try:
         path = f"accounts/{account_id}/containers/{container_id}/workspaces/{workspace_id}"
-        
         tags_resp = service.accounts().containers().workspaces().tags().list(parent=path).execute()
-        tags = tags_resp.get('tag', tags_resp.get('tags', []))
+        tags = tags_resp.get('tag', [])
         
         if not tags:
-            return (
-                f"No tags found in workspace {workspace_id}.\n\n"
-                f"Path checked: {path}\n\n"
-                "This could mean:\n"
-                "1. The workspace has no tags configured\n"
-                "2. Invalid account_id, container_id, or workspace_id\n"
-                "3. Permission denied for this account"
-            )
+            return f"No tags found in workspace {workspace_id}."
             
-        result = f"Tags in Workspace {workspace_id} (Container: {container_id}, Account: {account_id}):\n\n"
-        result += f"{'Tag Name':<40} | {'Type':<15} | {'ID':<15}\n"
-        result += "-" * 75 + "\n"
-        
+        result = f"Tags in Workspace {workspace_id}:\n"
         for tag in tags:
-            tag_name = tag.get('name', 'Unknown')
-            tag_type = tag.get('type', 'Unknown')
-            tag_id = tag.get('tagId', tag.get('id', 'N/A'))
-            result += f"{tag_name:<40} | {tag_type:<15} | {tag_id:<15}\n"
+            result += f"- {tag['name']} (Type: {tag['type']})\n"
             
         return result
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        
-        # Provide helpful debugging for common errors
-        if '404' in error_msg:
-            return (
-                f"404 Error - Not found or permission denied.\n\n"
-                f"Path: accounts/{account_id}/containers/{container_id}/workspaces/{workspace_id}\n\n"
-                "Please verify:\n"
-                "1. Account ID is correct (numeric, e.g., 6247347265)\n"
-                "2. Container ID is the internal numeric ID, NOT the public ID (GTM-XXXXX)\n"
-                "3. Workspace ID is correct (usually 1 for default, or increments after publishing)\n"
-                "4. Your Google account has access to this GTM account"
-            )
-        elif '403' in error_msg:
-            return (
-                f"403 Error - Forbidden. Your account doesn't have permission.\n\n"
-                f"Path: accounts/{account_id}/containers/{container_id}/workspaces/{workspace_id}\n\n"
-                "Try:\n"
-                "1. Verify you have Editor/Admin access in GTM\n"
-                "2. Re-authenticate in Claude Desktop\n"
-                "3. Ensure the Google account matches the GTM account owner"
-            )
-        else:
-            return f"Error listing GTM tags: {error_msg}\n\nDebug info:\n{traceback.format_exc()}"
+        return f"Error listing GTM tags: {str(e)}"
 
 if __name__ == "__main__":
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.getenv("PORT", "9000"))
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="sse")
