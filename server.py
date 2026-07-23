@@ -15,6 +15,10 @@ from google.analytics.data_v1beta.types import (
     Metric,
     RunReportRequest,
 )
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Initialize FastMCP server with host='0.0.0.0' so it doesn't accidentally
 # auto-enable local DNS rebinding protection (which blocks Render URLs with a 421)
@@ -25,6 +29,13 @@ SCOPES = [
     'https://www.googleapis.com/auth/analytics.readonly',
     'https://www.googleapis.com/auth/tagmanager.readonly'
 ]
+
+DEFAULT_GA4_PROPERTY_ID = os.environ.get('DEFAULT_GA4_PROPERTY_ID')
+DEFAULT_GSC_SITE_URL = os.environ.get('DEFAULT_GSC_SITE_URL')
+DEFAULT_GTM_ACCOUNT_ID = os.environ.get('DEFAULT_GTM_ACCOUNT_ID')
+DEFAULT_GTM_CONTAINER_ID = os.environ.get('DEFAULT_GTM_CONTAINER_ID')
+DEFAULT_GTM_WORKSPACE_ID = os.environ.get('DEFAULT_GTM_WORKSPACE_ID')
+
 CLIENT_SECRET_FILE = os.environ.get('GOOGLE_CLIENT_SECRET_FILE', 'credentials.json')
 TOKEN_FILE = 'token.json'
 
@@ -81,7 +92,7 @@ def gsc_list_sites() -> str:
     return result
 
 @mcp.tool()
-def gsc_query_analytics(site_url: str, start_date: str, end_date: str, dimensions: List[str] = None, row_limit: int = 10) -> str:
+def gsc_query_analytics(site_url: str = None, start_date: str = None, end_date: str = None, dimensions: List[str] = None, row_limit: int = 10) -> str:
     """
     Query organic search traffic data for a specific site.
     
@@ -92,6 +103,13 @@ def gsc_query_analytics(site_url: str, start_date: str, end_date: str, dimension
         dimensions: List of dimensions to group by (e.g., ['query', 'page', 'country', 'device', 'date'])
         row_limit: Maximum number of rows to return (default 10)
     """
+    site_url = site_url or DEFAULT_GSC_SITE_URL
+    if not site_url:
+        return "Error: No site_url provided and no DEFAULT_GSC_SITE_URL set."
+    
+    if not start_date or not end_date:
+        return "Error: Both start_date and end_date must be provided."
+        
     service = get_gsc_service()
     request = {
         'startDate': start_date,
@@ -134,7 +152,7 @@ def gsc_query_analytics(site_url: str, start_date: str, end_date: str, dimension
 # ==========================================
 
 @mcp.tool()
-def ga4_traffic_acquisition(property_id: str, start_date: str, end_date: str, limit: int = 10) -> str:
+def ga4_traffic_acquisition(property_id: str = None, start_date: str = "28daysAgo", end_date: str = "today", limit: int = 10) -> str:
     """
     Get user acquisition data by channel/source to see where traffic comes from.
     Useful for Marketing to analyze campaign performance.
@@ -145,6 +163,10 @@ def ga4_traffic_acquisition(property_id: str, start_date: str, end_date: str, li
         end_date: End date (e.g., 'today')
         limit: Max rows to return
     """
+    property_id = property_id or DEFAULT_GA4_PROPERTY_ID
+    if not property_id:
+        return "Error: No property_id provided and no DEFAULT_GA4_PROPERTY_ID set."
+        
     client = get_ga4_client()
     request = RunReportRequest(
         property=f"properties/{property_id}",
@@ -166,11 +188,15 @@ def ga4_traffic_acquisition(property_id: str, start_date: str, end_date: str, li
         return f"Error querying GA4: {str(e)}"
 
 @mcp.tool()
-def ga4_user_engagement(property_id: str, start_date: str, end_date: str) -> str:
+def ga4_user_engagement(property_id: str = None, start_date: str = "28daysAgo", end_date: str = "today") -> str:
     """
     Get high-level engagement metrics: Sessions, bounce rate, and average session duration.
     Useful for CEO/Marketing to gauge site health.
     """
+    property_id = property_id or DEFAULT_GA4_PROPERTY_ID
+    if not property_id:
+        return "Error: No property_id provided and no DEFAULT_GA4_PROPERTY_ID set."
+        
     client = get_ga4_client()
     request = RunReportRequest(
         property=f"properties/{property_id}",
@@ -200,11 +226,15 @@ def ga4_user_engagement(property_id: str, start_date: str, end_date: str) -> str
         return f"Error querying GA4: {str(e)}"
 
 @mcp.tool()
-def ga4_conversions_and_sales(property_id: str, start_date: str, end_date: str, limit: int = 10) -> str:
+def ga4_conversions_and_sales(property_id: str = None, start_date: str = "28daysAgo", end_date: str = "today", limit: int = 10) -> str:
     """
     Get conversion events, purchases, and total revenue.
     Useful for Sales and CEO to track ROI.
     """
+    property_id = property_id or DEFAULT_GA4_PROPERTY_ID
+    if not property_id:
+        return "Error: No property_id provided and no DEFAULT_GA4_PROPERTY_ID set."
+        
     client = get_ga4_client()
     request = RunReportRequest(
         property=f"properties/{property_id}",
@@ -235,6 +265,229 @@ def ga4_conversions_and_sales(property_id: str, start_date: str, end_date: str, 
                 
         result += "-" * 50 + "\n"
         result += f"TOTAL | {total_conv} | ${total_rev:.2f}\n"
+        return result
+    except Exception as e:
+        return f"Error querying GA4: {str(e)}"
+
+@mcp.tool()
+def ga4_user_acquisition(property_id: str = None, start_date: str = "28daysAgo", 
+                          end_date: str = "today", limit: int = 10) -> str:
+    """
+    Get user acquisition data by FIRST USER channel group (the channel that 
+    first acquired each user, not per-session). Returns Total Users, New Users, 
+    and Returning Users (computed as Total - New). Matches the GA4 UI's 
+    'User acquisition' report.
+    """
+    property_id = property_id or DEFAULT_GA4_PROPERTY_ID
+    if not property_id:
+        return "Error: No property_id provided and no DEFAULT_GA4_PROPERTY_ID set."
+        
+    client = get_ga4_client()
+    request = RunReportRequest(
+        property=f"properties/{property_id}",
+        dimensions=[Dimension(name="firstUserDefaultChannelGroup")],
+        metrics=[
+            Metric(name="totalUsers"), 
+            Metric(name="newUsers"),
+            Metric(name="userEngagementDuration"),
+            Metric(name="engagedSessions"),
+            Metric(name="eventCount"),
+            Metric(name="keyEvents"),
+        ],
+        date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+        limit=limit,
+        order_bys=[{"metric": {"metric_name": "totalUsers"}, "desc": True}]
+    )
+    
+    try:
+        response = client.run_report(request)
+        result = f"User Acquisition for Property {property_id} ({start_date} to {end_date}):\n\n"
+        headers = ["Channel", "Total Users", "New Users", "Returning Users", "Avg Engagement Time/User", "Engaged Sessions/User", "Event Count", "Key Events"]
+        result += " | ".join(headers) + "\n"
+        result += "-" * 100 + "\n"
+        
+        sum_total_users = 0
+        sum_new_users = 0
+        sum_returning_users = 0
+        sum_engagement_duration = 0.0
+        sum_engaged_sessions = 0.0
+        sum_event_count = 0
+        sum_key_events = 0
+        
+        for row in response.rows:
+            channel = row.dimension_values[0].value
+            total_users = int(row.metric_values[0].value)
+            new_users = int(row.metric_values[1].value)
+            returning_users = total_users - new_users
+            engagement_duration = float(row.metric_values[2].value)
+            engaged_sessions = float(row.metric_values[3].value)
+            event_count = int(row.metric_values[4].value)
+            key_events = int(row.metric_values[5].value)
+            
+            avg_engagement = engagement_duration / total_users if total_users > 0 else 0.0
+            engaged_sessions_per_user = engaged_sessions / total_users if total_users > 0 else 0.0
+            
+            result += f"{channel} | {total_users} | {new_users} | {returning_users} | {avg_engagement:.2f}s | {engaged_sessions_per_user:.2f} | {event_count} | {key_events}\n"
+            
+            sum_total_users += total_users
+            sum_new_users += new_users
+            sum_returning_users += returning_users
+            sum_engagement_duration += engagement_duration
+            sum_engaged_sessions += engaged_sessions
+            sum_event_count += event_count
+            sum_key_events += key_events
+            
+        result += "-" * 100 + "\n"
+        total_avg_engagement = sum_engagement_duration / sum_total_users if sum_total_users > 0 else 0.0
+        total_engaged_sessions_per_user = sum_engaged_sessions / sum_total_users if sum_total_users > 0 else 0.0
+        result += f"TOTAL | {sum_total_users} | {sum_new_users} | {sum_returning_users} | {total_avg_engagement:.2f}s | {total_engaged_sessions_per_user:.2f} | {sum_event_count} | {sum_key_events}\n"
+        return result
+    except Exception as e:
+        return f"Error querying GA4: {str(e)}"
+
+@mcp.tool()
+def ga4_source_medium(property_id: str = None, start_date: str = "28daysAgo", 
+                       end_date: str = "today", limit: int = 10) -> str:
+    """
+    Get user acquisition data by FIRST USER source / medium. Returns Total Users, 
+    New Users, and Returning Users (computed as Total - New) per source/medium.
+    """
+    property_id = property_id or DEFAULT_GA4_PROPERTY_ID
+    if not property_id:
+        return "Error: No property_id provided and no DEFAULT_GA4_PROPERTY_ID set."
+        
+    client = get_ga4_client()
+    request = RunReportRequest(
+        property=f"properties/{property_id}",
+        dimensions=[Dimension(name="firstUserSourceMedium")],
+        metrics=[
+            Metric(name="totalUsers"), 
+            Metric(name="newUsers"),
+            Metric(name="userEngagementDuration"),
+            Metric(name="engagedSessions"),
+            Metric(name="eventCount"),
+            Metric(name="keyEvents"),
+        ],
+        date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+        limit=limit,
+        order_bys=[{"metric": {"metric_name": "totalUsers"}, "desc": True}]
+    )
+    
+    try:
+        response = client.run_report(request)
+        result = f"Source / Medium Breakdown for Property {property_id} ({start_date} to {end_date}):\n\n"
+        headers = ["Source/Medium", "Total Users", "New Users", "Returning Users", "Avg Engagement Time/User", "Engaged Sessions/User", "Event Count", "Key Events"]
+        result += " | ".join(headers) + "\n"
+        result += "-" * 100 + "\n"
+        
+        sum_total_users = 0
+        sum_new_users = 0
+        sum_returning_users = 0
+        sum_engagement_duration = 0.0
+        sum_engaged_sessions = 0.0
+        sum_event_count = 0
+        sum_key_events = 0
+        
+        for row in response.rows:
+            source_medium = row.dimension_values[0].value
+            total_users = int(row.metric_values[0].value)
+            new_users = int(row.metric_values[1].value)
+            returning_users = total_users - new_users
+            engagement_duration = float(row.metric_values[2].value)
+            engaged_sessions = float(row.metric_values[3].value)
+            event_count = int(row.metric_values[4].value)
+            key_events = int(row.metric_values[5].value)
+            
+            avg_engagement = engagement_duration / total_users if total_users > 0 else 0.0
+            engaged_sessions_per_user = engaged_sessions / total_users if total_users > 0 else 0.0
+            
+            result += f"{source_medium} | {total_users} | {new_users} | {returning_users} | {avg_engagement:.2f}s | {engaged_sessions_per_user:.2f} | {event_count} | {key_events}\n"
+            
+            sum_total_users += total_users
+            sum_new_users += new_users
+            sum_returning_users += returning_users
+            sum_engagement_duration += engagement_duration
+            sum_engaged_sessions += engaged_sessions
+            sum_event_count += event_count
+            sum_key_events += key_events
+            
+        result += "-" * 100 + "\n"
+        total_avg_engagement = sum_engagement_duration / sum_total_users if sum_total_users > 0 else 0.0
+        total_engaged_sessions_per_user = sum_engaged_sessions / sum_total_users if sum_total_users > 0 else 0.0
+        result += f"TOTAL | {sum_total_users} | {sum_new_users} | {sum_returning_users} | {total_avg_engagement:.2f}s | {total_engaged_sessions_per_user:.2f} | {sum_event_count} | {sum_key_events}\n"
+        return result
+    except Exception as e:
+        return f"Error querying GA4: {str(e)}"
+
+@mcp.tool()
+def ga4_pages_and_screens(property_id: str = None, start_date: str = "28daysAgo",
+                           end_date: str = "today", limit: int = 10) -> str:
+    """
+    Get per-page performance: Views, Active Users, Views per Active User, 
+    Avg Engagement Time per Active User, Event Count, Key Events, Total Revenue.
+    Matches the GA4 UI's 'Pages and screens' report.
+    """
+    property_id = property_id or DEFAULT_GA4_PROPERTY_ID
+    if not property_id:
+        return "Error: No property_id provided and no DEFAULT_GA4_PROPERTY_ID set."
+        
+    client = get_ga4_client()
+    request = RunReportRequest(
+        property=f"properties/{property_id}",
+        dimensions=[Dimension(name="pagePath")],
+        metrics=[
+            Metric(name="screenPageViews"),
+            Metric(name="activeUsers"),
+            Metric(name="userEngagementDuration"),
+            Metric(name="eventCount"),
+            Metric(name="keyEvents"),
+            Metric(name="totalRevenue"),
+        ],
+        date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+        limit=limit,
+        order_bys=[{"metric": {"metric_name": "screenPageViews"}, "desc": True}]
+    )
+    
+    try:
+        response = client.run_report(request)
+        result = f"Pages and Screens performance for Property {property_id} ({start_date} to {end_date}):\n\n"
+        headers = ["Page Path", "Views", "Active Users", "Views per Active User", "Avg Engagement Time per Active User", "Event Count", "Key Events", "Total Revenue"]
+        result += " | ".join(headers) + "\n"
+        result += "-" * 120 + "\n"
+        
+        sum_views = 0
+        sum_active_users = 0
+        sum_engagement_duration = 0.0
+        sum_event_count = 0
+        sum_key_events = 0
+        sum_revenue = 0.0
+        
+        for row in response.rows:
+            page_path = row.dimension_values[0].value
+            views = int(row.metric_values[0].value)
+            active_users = int(row.metric_values[1].value)
+            engagement_duration = float(row.metric_values[2].value)
+            event_count = int(row.metric_values[3].value)
+            key_events = int(row.metric_values[4].value)
+            revenue = float(row.metric_values[5].value)
+            
+            views_per_active_user = views / active_users if active_users > 0 else 0.0
+            avg_engagement = engagement_duration / active_users if active_users > 0 else 0.0
+            
+            result += f"{page_path} | {views} | {active_users} | {views_per_active_user:.2f} | {avg_engagement:.2f}s | {event_count} | {key_events} | ${revenue:.2f}\n"
+            
+            sum_views += views
+            sum_active_users += active_users
+            sum_engagement_duration += engagement_duration
+            sum_event_count += event_count
+            sum_key_events += key_events
+            sum_revenue += revenue
+            
+        result += "-" * 120 + "\n"
+        total_views_per_active_user = sum_views / sum_active_users if sum_active_users > 0 else 0.0
+        total_avg_engagement = sum_engagement_duration / sum_active_users if sum_active_users > 0 else 0.0
+        
+        result += f"TOTAL | {sum_views} | {sum_active_users} | {total_views_per_active_user:.2f} | {total_avg_engagement:.2f}s | {sum_event_count} | {sum_key_events} | ${sum_revenue:.2f}\n"
         return result
     except Exception as e:
         return f"Error querying GA4: {str(e)}"
@@ -273,11 +526,21 @@ def gtm_list_accounts_containers() -> str:
         return f"Error listing GTM accounts: {str(e)}"
 
 @mcp.tool()
-def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
+def gtm_list_tags(account_id: str = None, container_id: str = None, workspace_id: str = None) -> str:
     """
     List all active tracking tags in a GTM container workspace.
     Useful for Marketing to audit what is being tracked (e.g. Meta Pixel, LinkedIn Insight).
     """
+    account_id = account_id or DEFAULT_GTM_ACCOUNT_ID
+    if not account_id:
+        return "Error: No account_id provided and no DEFAULT_GTM_ACCOUNT_ID set."
+    container_id = container_id or DEFAULT_GTM_CONTAINER_ID
+    if not container_id:
+        return "Error: No container_id provided and no DEFAULT_GTM_CONTAINER_ID set."
+    workspace_id = workspace_id or DEFAULT_GTM_WORKSPACE_ID
+    if not workspace_id:
+        return "Error: No workspace_id provided and no DEFAULT_GTM_WORKSPACE_ID set."
+        
     service = get_gtm_service()
     try:
         path = f"accounts/{account_id}/containers/{container_id}/workspaces/{workspace_id}"
@@ -294,6 +557,35 @@ def gtm_list_tags(account_id: str, container_id: str, workspace_id: str) -> str:
         return result
     except Exception as e:
         return f"Error listing GTM tags: {str(e)}"
+
+@mcp.tool()
+def gtm_list_workspaces(account_id: str = None, container_id: str = None) -> str:
+    """
+    List all workspaces in a GTM container, so their IDs can be used in gtm_list_tags.
+    """
+    account_id = account_id or DEFAULT_GTM_ACCOUNT_ID
+    if not account_id:
+        return "Error: No account_id provided and no DEFAULT_GTM_ACCOUNT_ID set."
+    container_id = container_id or DEFAULT_GTM_CONTAINER_ID
+    if not container_id:
+        return "Error: No container_id provided and no DEFAULT_GTM_CONTAINER_ID set."
+        
+    try:
+        service = get_gtm_service()
+        path = f"accounts/{account_id}/containers/{container_id}"
+        resp = service.accounts().containers().workspaces().list(parent=path).execute()
+        workspaces = resp.get('workspace', [])
+        
+        if not workspaces:
+            return f"No workspaces found for container {container_id}."
+            
+        result = "Workspace Name | ID\n"
+        result += "-" * 30 + "\n"
+        for ws in workspaces:
+            result += f"{ws.get('name')} | {ws.get('workspaceId')}\n"
+        return result
+    except Exception as e:
+        return f"Error listing GTM workspaces: {str(e)}"
 
 if __name__ == "__main__":
     import uvicorn
