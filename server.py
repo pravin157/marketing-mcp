@@ -37,29 +37,85 @@ DEFAULT_GTM_CONTAINER_ID = os.environ.get('DEFAULT_GTM_CONTAINER_ID')
 DEFAULT_GTM_WORKSPACE_ID = os.environ.get('DEFAULT_GTM_WORKSPACE_ID')
 
 CLIENT_SECRET_FILE = os.environ.get('GOOGLE_CLIENT_SECRET_FILE', 'credentials.json')
-TOKEN_FILE = 'token.json'
+TOKEN_FILE = os.environ.get('GOOGLE_TOKEN_FILE', 'token.json')
 
 def get_credentials():
-    """Authenticate and return Google Credentials."""
+    """Authenticate and return Google Credentials with support for local files and cloud env vars."""
     creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'r') as token:
-            creds = Credentials.from_authorized_user_info(json.load(token), SCOPES)
-            
+    
+    # 1. Check if token is passed via GOOGLE_TOKEN_JSON environment variable (e.g. on Render)
+    token_json_env = os.environ.get('GOOGLE_TOKEN_JSON')
+    if token_json_env:
+        try:
+            token_data = json.loads(token_json_env)
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        except Exception as e:
+            print(f"Warning: Could not parse GOOGLE_TOKEN_JSON: {e}")
+
+    # 2. Check token file paths (local or Render Secret Files)
+    token_candidates = [
+        TOKEN_FILE,
+        'token.json',
+        '/etc/secrets/token.json'
+    ]
+    if not creds:
+        for path in token_candidates:
+            if path and os.path.exists(path):
+                try:
+                    with open(path, 'r') as token:
+                        creds = Credentials.from_authorized_user_info(json.load(token), SCOPES)
+                    if creds:
+                        break
+                except Exception as e:
+                    print(f"Warning: Could not read token from {path}: {e}")
+
+    # 3. Handle refresh or fallback
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            # Safely attempt to persist refreshed token if possible
+            for path in token_candidates:
+                if path and os.path.exists(path):
+                    try:
+                        with open(path, 'w') as token:
+                            token.write(creds.to_json())
+                        break
+                    except Exception:
+                        pass
         else:
-            if not os.path.exists(CLIENT_SECRET_FILE):
-                raise FileNotFoundError(f"OAuth Client Secret file '{CLIENT_SECRET_FILE}' not found. Please provide one or set GOOGLE_CLIENT_SECRET_FILE env var.")
+            secret_candidates = [
+                CLIENT_SECRET_FILE,
+                'client_secret.json',
+                'credentials.json',
+                '/etc/secrets/client_secret.json',
+                '/etc/secrets/credentials.json'
+            ]
+            secret_file = next((p for p in secret_candidates if p and os.path.exists(p)), None)
             
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+            # If secret file not found, check GOOGLE_CLIENT_SECRET_JSON env var
+            if not secret_file and os.environ.get('GOOGLE_CLIENT_SECRET_JSON'):
+                secret_file = 'client_secret.json'
+                try:
+                    with open(secret_file, 'w') as f:
+                        f.write(os.environ['GOOGLE_CLIENT_SECRET_JSON'])
+                except Exception:
+                    pass
+
+            if not secret_file or not os.path.exists(secret_file):
+                raise FileNotFoundError(
+                    "Google OAuth credentials/token not found. Please provide GOOGLE_TOKEN_JSON env var or upload token.json."
+                )
+            
+            flow = InstalledAppFlow.from_client_secrets_file(secret_file, SCOPES)
             creds = flow.run_local_server(port=0)
-            
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
+            try:
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+            except Exception:
+                pass
             
     return creds
+
 
 def get_gsc_service():
     return build('searchconsole', 'v1', credentials=get_credentials())
@@ -590,10 +646,13 @@ def gtm_list_workspaces(account_id: str = None, container_id: str = None) -> str
 if __name__ == "__main__":
     import uvicorn
     from starlette.responses import PlainTextResponse
-    # The root URL / will return a 404 in the browser, but this is expected!
-    # Claude Desktop connects to the /sse endpoint directly.
 
-    mcp.settings.host = "0.0.0.0"
-    mcp.settings.port = int(os.getenv("PORT", "9000"))
+    # Create the Starlette SSE app and add a health-check endpoint for Render/browsers
+    app = mcp.sse_app()
+    app.add_route("/", lambda req: PlainTextResponse("Marketing MCP Server is running!"), methods=["GET"])
+
+    host = "0.0.0.0"
+    port = int(os.getenv("PORT", "9000"))
     
-    uvicorn.run(mcp.sse_app, host=mcp.settings.host, port=mcp.settings.port)
+    print(f"Starting Marketing MCP server on {host}:{port}")
+    uvicorn.run(app, host=host, port=port)
