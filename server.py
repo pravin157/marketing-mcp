@@ -646,10 +646,18 @@ def gtm_list_workspaces(account_id: str = None, container_id: str = None) -> str
 if __name__ == "__main__":
     import uvicorn
     from starlette.responses import PlainTextResponse
+    from starlette.middleware.cors import CORSMiddleware
 
     # Create the Starlette SSE app and add a health-check endpoint for Render/browsers
     app = mcp.sse_app()
-    app.add_route("/", lambda req: PlainTextResponse("Marketing MCP Server is running!"), methods=["GET"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_route("/", lambda req: PlainTextResponse("Marketing MCP Server is running!"), methods=["GET", "POST", "HEAD", "OPTIONS"])
 
     host = "0.0.0.0"
     port = int(os.getenv("PORT", "9000"))
