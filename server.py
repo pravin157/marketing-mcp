@@ -644,23 +644,17 @@ def gtm_list_workspaces(account_id: str = None, container_id: str = None) -> str
         return f"Error listing GTM workspaces: {str(e)}"
 
 if __name__ == "__main__":
-    import uvicorn
     from starlette.responses import PlainTextResponse
-    from starlette.middleware.cors import CORSMiddleware
 
-    # Create the Starlette SSE app and add a health-check endpoint for Render/browsers
-    app = mcp.sse_app()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.add_route("/", lambda req: PlainTextResponse("Marketing MCP Server is running!"), methods=["GET", "POST", "HEAD", "OPTIONS"])
+    # Register root health-check route
+    @mcp.custom_route("/", methods=["GET", "HEAD"])
+    async def root_health(request):
+        return PlainTextResponse("Marketing MCP Server is running!")
 
-    host = "0.0.0.0"
     port = int(os.getenv("PORT", "9000"))
-    
-    print(f"Starting Marketing MCP server on {host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    mcp.settings.port = port
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.streamable_http_path = "/mcp"
+
+    print(f"Starting Marketing MCP server on 0.0.0.0:{port} with Streamable HTTP at /mcp")
+    mcp.run(transport="streamable-http")
